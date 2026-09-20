@@ -15,6 +15,7 @@
   #msg { margin-top:12px; font-size:14px; }
   .error { color:#c62828; }
   .success { color:#2e7d32; }
+  #debugLog { font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-all; background:#222; color:#0f0; padding:10px; margin-top:20px; border-radius:8px; max-height:280px; overflow:auto; text-align:left; direction:ltr; }
 </style>
 </head>
 <body>
@@ -24,40 +25,72 @@
     <input id="password" type="password" placeholder="كلمة المرور الجديدة (٦ أحرف على الأقل)" />
     <button id="submitBtn">تحديث كلمة المرور</button>
     <div id="msg"></div>
+    <div id="debugLog"></div>
   </div>
   <script>
+    // ✅ تشخيصي مؤقَّت (Sprint 64، سيُزال بعد تأكيد نجاح الاختبار الفعلي):
+    // كل خطوة تُسجَّل هنا مرئيًا على الصفحة نفسها (لا Console فقط) — لا مجال
+    // لعطل صامت بعد الآن، أيًّا كانت نقطة التوقف ستظهر هنا حرفيًا.
+    const debugEl = document.getElementById('debugLog');
+    function log(msg) {
+      const t = new Date().toISOString().substring(11, 23);
+      debugEl.textContent += '[' + t + '] ' + msg + '\n';
+      debugEl.scrollTop = debugEl.scrollHeight;
+    }
+
+    log('Script tag executing.');
+    log('typeof window.supabase = ' + typeof window.supabase);
+
+    window.addEventListener('error', function (e) {
+      log('window.onerror: ' + e.message + ' (' + e.filename + ':' + e.lineno + ')');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var reason = e.reason;
+      log('unhandledrejection: ' + (reason && reason.message ? reason.message : JSON.stringify(reason)));
+    });
+
     const msgEl = document.getElementById('msg');
     const btn = document.getElementById('submitBtn');
 
-    // ✅ شبكة أمان: أي خطأ JS غير مُتوقَّع (مثل فشل تحميل مكتبة Supabase من
-    // الـCDN) كان يمرّ بصمت تام سابقًا (لا رسالة نجاح ولا خطأ، الزر لا يفعل
-    // شيئًا إطلاقًا) — الآن يظهر كرسالة واضحة بدل الصمت.
-    window.addEventListener('error', (e) => {
-      msgEl.innerHTML = '<span class="error">حدث خطأ غير متوقَّع في الصفحة. أعد تحميلها أو اطلب رابطًا جديدًا من التطبيق.</span>';
-      btn.disabled = true;
-    });
+    let supabaseClient;
+    try {
+      // ⚠️ detectSessionInUrl: false — عمدًا. الافتراضي في supabase-js v2 هو
+      // true، أي أن المكتبة نفسها تفحص الرابط وتستهلك التوكن تلقائيًا أثناء
+      // createClient() ذاتها، قبل وصول كودنا اليدوي أدناه إطلاقًا — قد يكون
+      // هذا هو ما يُفرِغ الرابط من التوكن صامتًا. نُعطِّله لنتحكم بالعملية
+      // يدويًا بالكامل ونتأكد من ذلك بالـLog، بدل افتراض السبب.
+      supabaseClient = window.supabase.createClient(
+        'https://gtvlxkqwbgshemyqfxzi.supabase.co',
+        'sb_publishable_PSG6Bs6XyYgzrIhB8HNxFw_-IPCLTWv',
+        { auth: { detectSessionInUrl: false, persistSession: false } }
+      );
+      log('supabaseClient created OK.');
+    } catch (e) {
+      log('EXCEPTION creating supabaseClient: ' + e.message);
+    }
 
-    // ⚠️ نسخة DEV فقط — Supabase URL/Anon Key هنا مضبوطان صراحةً على مشروع
-    // pizza-bitluz-dev (نفس القيم في supabase_config.dart، آمنة تمامًا،
-    // Client-safe بالتصميم). نسخة PROD منفصلة بقيم مختلفة (راجع
-    // reset-password-prod.html).
-    const supabaseClient = window.supabase.createClient(
-      'https://gtvlxkqwbgshemyqfxzi.supabase.co',
-      'sb_publishable_PSG6Bs6XyYgzrIhB8HNxFw_-IPCLTWv'
-    );
-
-    // ✅ Supabase قد يُنتج رابط استرجاع بصيغة PKCE (?code=...) أو بالصيغة
-    // الكلاسيكية (Fragment: #access_token=...&refresh_token=...) حسب إعداد
-    // Auth Flow لهذا المشروع تحديدًا — نتعامل مع الحالتين معًا بدل افتراض
-    // واحدة فقط، لتعمل الصفحة بصرف النظر عن الإعداد الفعلي.
     async function establishSessionFromUrl() {
+      log('establishSessionFromUrl() start.');
+      log('location.search = ' + window.location.search);
+      log('location.hash = ' + window.location.hash);
+
       const queryParams = new URLSearchParams(window.location.search);
       const code = queryParams.get('code');
+      log('query "code" param = ' + code);
+
       if (code) {
-        const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
-        if (error) {
-          msgEl.innerHTML = '<span class="error">الرابط غير صالح أو منتهي الصلاحية. اطلب رابطًا جديدًا من التطبيق.</span>';
-          btn.disabled = true;
+        log('Calling exchangeCodeForSession(code)...');
+        try {
+          const { data, error } = await supabaseClient.auth.exchangeCodeForSession(code);
+          log('exchangeCodeForSession -> error=' + JSON.stringify(error) + ' hasSession=' + !!(data && data.session));
+          if (error) {
+            msgEl.innerHTML = '<span class="error">الرابط غير صالح أو منتهي الصلاحية. اطلب رابطًا جديدًا من التطبيق.</span>';
+            btn.disabled = true;
+          } else {
+            log('Session established via PKCE code exchange.');
+          }
+        } catch (e) {
+          log('EXCEPTION in exchangeCodeForSession: ' + e.message);
         }
         return;
       }
@@ -66,38 +99,66 @@
       const hashParams = new URLSearchParams(hash);
       const accessToken = hashParams.get('access_token');
       const refreshToken = hashParams.get('refresh_token');
+      log('hash access_token present = ' + !!accessToken);
+      log('hash refresh_token present = ' + !!refreshToken);
+
       if (!accessToken || !refreshToken) {
+        log('No recovery tokens found anywhere (neither ?code nor #access_token). Showing invalid-link error.');
         msgEl.innerHTML = '<span class="error">الرابط غير صالح أو منتهي الصلاحية. اطلب رابطًا جديدًا من التطبيق.</span>';
         btn.disabled = true;
         return;
       }
-      const { error } = await supabaseClient.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-      if (error) {
-        msgEl.innerHTML = '<span class="error">الرابط غير صالح أو منتهي الصلاحية. اطلب رابطًا جديدًا من التطبيق.</span>';
-        btn.disabled = true;
+
+      log('Calling setSession(access_token, refresh_token)...');
+      try {
+        const { data, error } = await supabaseClient.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        log('setSession -> error=' + JSON.stringify(error) + ' hasSession=' + !!(data && data.session));
+        if (error) {
+          msgEl.innerHTML = '<span class="error">الرابط غير صالح أو منتهي الصلاحية. اطلب رابطًا جديدًا من التطبيق.</span>';
+          btn.disabled = true;
+        } else {
+          log('Session established via setSession.');
+        }
+      } catch (e) {
+        log('EXCEPTION in setSession: ' + e.message);
       }
     }
 
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async function () {
+      log('Button clicked.');
       const password = document.getElementById('password').value;
+      log('password length = ' + password.length);
       if (!password || password.length < 6) {
+        log('Password too short, aborting before updateUser().');
         msgEl.innerHTML = '<span class="error">كلمة المرور يجب أن تكون ٦ أحرف على الأقل.</span>';
         return;
       }
       btn.disabled = true;
-      const { error } = await supabaseClient.auth.updateUser({ password });
-      if (error) {
-        msgEl.innerHTML = '<span class="error">تعذّر تحديث كلمة المرور. حاول مرة أخرى أو اطلب رابطًا جديدًا.</span>';
+      log('Calling updateUser({password})...');
+      try {
+        const { data, error } = await supabaseClient.auth.updateUser({ password: password });
+        log('updateUser -> error=' + JSON.stringify(error) + ' hasUser=' + !!(data && data.user));
+        if (error) {
+          msgEl.innerHTML = '<span class="error">تعذّر تحديث كلمة المرور. حاول مرة أخرى أو اطلب رابطًا جديدًا.</span>';
+          btn.disabled = false;
+          return;
+        }
+        log('Password updated successfully.');
+        msgEl.innerHTML = '<span class="success">تم تحديث كلمة المرور بنجاح. يمكنك الآن العودة لتطبيق بيتزا بيتلوز وتسجيل الدخول برقمك وكلمة المرور الجديدة.</span>';
+      } catch (e) {
+        log('EXCEPTION in updateUser: ' + e.message);
+        msgEl.innerHTML = '<span class="error">حدث خطأ غير متوقَّع. حاول مرة أخرى.</span>';
         btn.disabled = false;
-        return;
       }
-      msgEl.innerHTML = '<span class="success">تم تحديث كلمة المرور بنجاح. يمكنك الآن العودة لتطبيق بيتزا بيتلوز وتسجيل الدخول برقمك وكلمة المرور الجديدة.</span>';
     });
+    log('Button click listener attached.');
 
-    establishSessionFromUrl();
+    establishSessionFromUrl()
+      .then(function () { log('establishSessionFromUrl() finished.'); })
+      .catch(function (e) { log('establishSessionFromUrl() threw: ' + e.message); });
   </script>
 </body>
 </html>
